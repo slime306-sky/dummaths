@@ -3,6 +3,8 @@
 #include <cstring>
 #include <unordered_map>
 #include <memory>
+#include <sstream>
+#include <iomanip>
 
 using namespace std;
 
@@ -71,12 +73,12 @@ private:
     }
 
     char consume(int offset = 1){
-        if((pos + offset) >= size){
+        if((pos + offset - 1) >= size){
             cerr << "Error : Tried to consume charcter that didn't exits at " << 
-                pos + offset << endl << " pos : " << pos << ", offset : " << offset << ", size : " << size;
+                pos + offset << endl << " pos : " << pos << ", offset : " << offset << ", size : " << size << endl;
             throw runtime_error("Lexer: consume out of bounds");
         }
-        char character = input[pos + offset];
+        char character = input[pos];
         pos += offset;
         return character;
     }
@@ -152,7 +154,6 @@ struct BinaryOperatorNode : ASTNode{
 
 class Parser {
 private: 
-    unique_ptr<Laxer> laxer;
     vector<Token> Tokens;
     int pos = 0;
 
@@ -175,11 +176,180 @@ private:
         }
         return false;
     }
+
+    unique_ptr<ASTNode> parsePrimary(){
+        if(match(TokenType::NUMBER))
+            return make_unique<NumberNode>(Tokens[pos-1].value); // match consumed token (pos++) that's why we did pos-1 to access the previous token's value
+        
+        else if (match(TokenType::OPEN_BRACKET)){
+            auto expr = parseExpression();
+            if(match(TokenType::CLOSE_BRACKET)) throw runtime_error("Parser Error: Missing closing bracket\n");
+            return expr;
+        }
+        throw runtime_error("Parser Error: Unknown Token in parsePrimery\n");
+    }
+
+    unique_ptr<ASTNode> parseTerm(){
+        auto node = parsePrimary();
+        while (true){
+            if(match(TokenType::STAR)){
+                auto right = parsePrimary();
+                node = make_unique<BinaryOperatorNode>(move(node), "*", move(right));
+            }
+            else if(match(TokenType::SLASH)){
+                auto right = parsePrimary();
+                node = make_unique<BinaryOperatorNode>(move(node), "/", move(right));
+            }
+            else break;
+        }
+        return node;         
+    }
+
+    unique_ptr<ASTNode> parseExpression(){
+        auto node = parseTerm();
+        while (true){
+            if(match(TokenType::PLUS)){
+                auto right = parseTerm();
+                node = make_unique<BinaryOperatorNode>(move(node), "+", move(right));
+            }
+            else if(match(TokenType::MINUS)){
+                auto right = parseTerm();
+                node = make_unique<BinaryOperatorNode>(move(node), "-", move(right));
+            }
+            else break;
+        }
+        return node;         
+    }
+
+public:
+    Parser(vector<Token> toks): Tokens(move(toks)){}
+
+    unique_ptr<ASTNode> parse(){ 
+        return parseExpression();
+    }
+};
+class PrettyPrint{
+private:
+    string astToString(const ASTNode* node, bool isRoot = true){
+        if(const NumberNode* n = dynamic_cast<const NumberNode*>(node)){
+            ostringstream oss;
+            oss << setprecision(12) << n->value;
+            string s = oss.str();
+            if(s.find('.') != string::npos){
+                while(!s.empty() && s.back() == '0') s.pop_back();
+                if(!s.empty() && s.back() == '.') s.pop_back(); 
+            }
+            return s;
+        }
+        if(const BinaryOperatorNode* b = dynamic_cast<const BinaryOperatorNode*>(node)){
+            string left = astToString(b->left.get(), false);
+            string right = astToString(b->right.get(), false);
+            string expr = left + " " + b->op + " " + right;
+            if(!isRoot) return "( " + expr + " )";
+            return expr;
+        }
+        return "?";
+    }
+
+    void findDeepestReducible(unique_ptr<ASTNode>& node, unique_ptr<ASTNode>** bestPtr, int depth, int& bestDepth){
+        if(!node) return;
+        if(BinaryOperatorNode* b = dynamic_cast<BinaryOperatorNode*>(node.get())){
+            bool leftIsNum = dynamic_cast<NumberNode*>(b->left.get()) != nullptr;
+            bool rightIsNum = dynamic_cast<NumberNode*>(b->right.get()) != nullptr;
+            if(leftIsNum && rightIsNum){
+                if(depth > bestDepth){
+                    bestDepth = depth;
+                    *bestPtr = &node;
+                }
+            }
+            // recurse left then right to prefer leftmost at same depth
+            findDeepestReducible(b->left, bestPtr, depth+1, bestDepth);
+            findDeepestReducible(b->right, bestPtr, depth+1, bestDepth);
+        }
+    }
+
+    double applyOp(double a, double b, const string& op){
+        if(op == "+") return a + b;
+        if(op == "-") return a - b;
+        if(op == "*") return a * b;
+        if(op == "/"){
+            if(b == 0.0) throw runtime_error("Division by zero");
+            return a / b;
+        }
+        throw runtime_error("Unknown operator: " + op);
+    }
+
+public:
+      void print(unique_ptr<ASTNode> root){
+        // Print the original expression (nicely)
+        cout << "\n" << astToString(root.get(), true) << "\n";
+
+        // Rewriting loop
+        int step = 1;
+        while(dynamic_cast<NumberNode*>(root.get()) == nullptr){
+            unique_ptr<ASTNode>* bestPtr = nullptr;
+            int bestDepth = -1;
+            findDeepestReducible(root, &bestPtr, 0, bestDepth);
+            if(!bestPtr){
+                cerr << "No reducible node found (malformed AST?)\n";
+                return;
+            }
+
+            // bestPtr points to a unique_ptr holding a BinaryOperatorNode whose children are both NumberNode
+            BinaryOperatorNode* bin = dynamic_cast<BinaryOperatorNode*>((*bestPtr).get());
+            NumberNode* L = dynamic_cast<NumberNode*>(bin->left.get());
+            NumberNode* R = dynamic_cast<NumberNode*>(bin->right.get());
+            if(!L || !R){
+                cerr << "Internal error: expected number children\n";
+                return;
+            }
+
+            double a = L->value;
+            double b = R->value;
+            double res;
+            try {
+                res = applyOp(a, b, bin->op);
+            } catch(const std::exception& e){
+                cerr << "Evaluation error: " << e.what() << endl;
+                return;
+            }
+
+            // Replace the binary node with a NumberNode(result)
+            *bestPtr = make_unique<NumberNode>(res);
+
+            // print the rewritten expression
+            cout << "=> " << astToString(root.get(), true) << "\n";
+            step++;
+        }
+
+        // final answer
+        NumberNode* finalN = dynamic_cast<NumberNode*>(root.get());
+        cout << "\nFinal Answer: ";
+        finalN->print();
+        cout << "\n";
+
+    }
+
 };
 
 int main(){
+    string input;
+    cout << "Enter Expression : ";
+    getline(cin, input);
     
-            
+    Laxer laxer(input.c_str());
+    vector<Token> tokens = laxer.Tokenizer();
+
+    Parser parser(tokens);
+    unique_ptr<ASTNode> ast = parser.parse();
+
+    cout << "Parsed expresstion (AST): " << endl;
+    ast->print();
+    cout << "\n\n";
+    
+    int step = 1;
+    PrettyPrint prettyPrint;
+    prettyPrint.print(move(ast));
 
     return 0;
 }
