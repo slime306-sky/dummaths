@@ -5,6 +5,7 @@
 #include <memory>
 #include <sstream>
 #include <iomanip>
+#include <cmath>
 
 using namespace std;
 
@@ -19,6 +20,8 @@ enum class TokenType {
     MINUS,
     STAR,
     SLASH,
+
+    EXPONENT,
 
     OPEN_BRACKET,
     CLOSE_BRACKET,
@@ -38,7 +41,7 @@ struct Token
     int position;
     TokenType tokenType;
     string token;
-    int value;
+    double value;
 
     void printToken(){
         cout << position << ") " << TokenToString(tokenType) << " : " << token;  
@@ -51,8 +54,8 @@ class Laxer {
 private:
     vector<Token> Tokens;
     const char* input;
-    int pos = 0;
-    int size = strlen(input);
+    int pos;
+    int size;
 
     unordered_map<char, TokenType> singleCharToken = {
         {'+', TokenType::PLUS},
@@ -60,6 +63,7 @@ private:
         {'*', TokenType::STAR},
         {'/', TokenType::SLASH},
         {'=', TokenType::EQUAL_TO},
+        {'^', TokenType::EXPONENT},
 
         {'(', TokenType::OPEN_BRACKET},
         {')', TokenType::CLOSE_BRACKET},
@@ -83,27 +87,34 @@ private:
         return character;
     }
 
+    double parseInteger(){
+        string numstr;
+        bool hasDot = false;
+
+        while(isdigit(peek()) || peek() == '.'){
+            if(peek() == '.'){
+                if(hasDot) break;
+                hasDot = true;
+            }
+            numstr.push_back(consume());
+        }
+        return stod(numstr);
+    }
     
 public: 
     
-    Laxer(const char* Input) : input(Input){
+    Laxer(const char* Input) : input(Input), pos(0), size(strlen(input)){
     }
 
-    int parseInteger(){
-        int result = 0;
-        while(isdigit(peek()))
-            result = result * 10 + (consume() - '0');
-        return result;
-    }
 
     vector<Token> Tokenizer(){
         while(peek() != '\0'){
             char ch = peek();
             
             // for number
-            if(isdigit(ch)){
+            if(isdigit(ch) || ch == '.'){
                 int _pos = pos;
-                int value = parseInteger();
+                double value = parseInteger();
                 Tokens.push_back({_pos, TokenType::NUMBER, to_string(value), value});
             }
             else if(singleCharToken.count(ch)){
@@ -111,7 +122,7 @@ public:
                 consume();
             }
             else if(isspace(ch)){
-                Tokens.push_back({pos, TokenType::SPACE, "space", 0});
+                // Tokens.push_back({pos, TokenType::SPACE, "space", 0});
                 consume();
             }
             else{
@@ -131,8 +142,8 @@ struct ASTNode {
 };
 
 struct NumberNode : ASTNode {
-    int value;
-    NumberNode(int val) : value(val) {};
+    double value;
+    NumberNode(double val) : value(val) {};
     void print() const override { cout << value; }
 };
 
@@ -183,21 +194,40 @@ private:
         
         else if (match(TokenType::OPEN_BRACKET)){
             auto expr = parseExpression();
-            if(match(TokenType::CLOSE_BRACKET)) throw runtime_error("Parser Error: Missing closing bracket\n");
+            if(!match(TokenType::CLOSE_BRACKET)) throw runtime_error("Parser Error: Missing closing bracket\n");
             return expr;
         }
         throw runtime_error("Parser Error: Unknown Token in parsePrimery\n");
     }
 
+    unique_ptr<ASTNode> parseUnary(){
+        if(match(TokenType::PLUS))
+            return parseUnary();
+        else if (match(TokenType::MINUS))   {
+            auto node = parseUnary();
+            return make_unique<BinaryOperatorNode>(make_unique<NumberNode>(0), "-", move(node));
+        }
+        return parsePrimary();
+    }
+
+    unique_ptr<ASTNode> parsePower(){
+        auto node = parseUnary();
+        while(match(TokenType::EXPONENT)){
+            auto right = parsePower();
+            node = make_unique<BinaryOperatorNode>(move(node), "^", move(right));
+        }
+        return node;
+    }
+
     unique_ptr<ASTNode> parseTerm(){
-        auto node = parsePrimary();
+        auto node = parsePower();
         while (true){
             if(match(TokenType::STAR)){
-                auto right = parsePrimary();
+                auto right = parsePower();
                 node = make_unique<BinaryOperatorNode>(move(node), "*", move(right));
             }
             else if(match(TokenType::SLASH)){
-                auto right = parsePrimary();
+                auto right = parsePower();
                 node = make_unique<BinaryOperatorNode>(move(node), "/", move(right));
             }
             else break;
@@ -276,6 +306,7 @@ private:
             if(b == 0.0) throw runtime_error("Division by zero");
             return a / b;
         }
+        if(op == "^") return pow(a, b);
         throw runtime_error("Unknown operator: " + op);
     }
 
@@ -319,7 +350,7 @@ public:
 
             // print the rewritten expression
             cout << "=> " << astToString(root.get(), true) << "\n";
-            step++;
+            //step++;
         }
 
         // final answer
