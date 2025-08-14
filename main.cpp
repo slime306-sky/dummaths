@@ -22,6 +22,8 @@ enum class TokenType {
     SLASH,
 
     EXPONENT,
+    MODULO,
+    FACTORIAL,
 
     OPEN_BRACKET,
     CLOSE_BRACKET,
@@ -62,8 +64,12 @@ private:
         {'-', TokenType::MINUS},
         {'*', TokenType::STAR},
         {'/', TokenType::SLASH},
+        
         {'=', TokenType::EQUAL_TO},
+        
         {'^', TokenType::EXPONENT},
+        {'%', TokenType::MODULO},
+        {'!', TokenType::FACTORIAL},
 
         {'(', TokenType::OPEN_BRACKET},
         {')', TokenType::CLOSE_BRACKET},
@@ -210,8 +216,16 @@ private:
         return parsePrimary();
     }
 
-    unique_ptr<ASTNode> parsePower(){
+    unique_ptr<ASTNode> parsePostfix(){
         auto node = parseUnary();
+        while(match(TokenType::FACTORIAL)){
+            node = make_unique<BinaryOperatorNode>(move(node), "!", nullptr);
+        }
+        return node;
+    }
+
+    unique_ptr<ASTNode> parsePower(){
+        auto node = parsePostfix();
         while(match(TokenType::EXPONENT)){
             auto right = parsePower();
             node = make_unique<BinaryOperatorNode>(move(node), "^", move(right));
@@ -229,6 +243,10 @@ private:
             else if(match(TokenType::SLASH)){
                 auto right = parsePower();
                 node = make_unique<BinaryOperatorNode>(move(node), "/", move(right));
+            }
+            else if(match(TokenType::MODULO)){
+                auto right = parsePower();
+                node = make_unique<BinaryOperatorNode>(move(node), "%", move(right));
             }
             else break;
         }
@@ -300,14 +318,27 @@ private:
 
     double applyOp(double a, double b, const string& op){
         if(op == "+") return a + b;
-        if(op == "-") return a - b;
-        if(op == "*") return a * b;
-        if(op == "/"){
-            if(b == 0.0) throw runtime_error("Division by zero");
+        else if(op == "-") return a - b;
+        else if(op == "*") return a * b;
+        else if(op == "/"){
+            if(b == 0.0) throw runtime_error("Error evaluate op: Division by zero");
             return a / b;
         }
-        if(op == "^") return pow(a, b);
-        throw runtime_error("Unknown operator: " + op);
+        else if(op == "^") return pow(a, b);
+        else if(op == "%"){
+            long long ia = static_cast<long long>(a);
+            long long ib = static_cast<long long>(b);
+            if(ib == 0 ) throw runtime_error("Error evaluate op: Modulo by zero");
+            return ia % ib;
+        }
+        else if(op == "!"){
+            if(a < 0 || floor(a) != 0) throw runtime_error("Error evaluate op: fact for only non-neg int");
+            long long n = static_cast<long long>(a);
+            long long res = 1;
+            for(long long i = 2; i <= n; i++) res *= i;
+            return res;
+        }
+        throw runtime_error("Error evaluate op: Unknown operator " + op);
     }
 
 public:
@@ -364,23 +395,27 @@ public:
 };
 
 int main(){
-    string input;
-    cout << "Enter Expression : ";
-    getline(cin, input);
-    
-    Laxer laxer(input.c_str());
-    vector<Token> tokens = laxer.Tokenizer();
+    bool running = true;
+    while(running){
 
-    Parser parser(tokens);
-    unique_ptr<ASTNode> ast = parser.parse();
-
-    cout << "Parsed expresstion (AST): " << endl;
-    ast->print();
-    cout << "\n\n";
-    
-    int step = 1;
-    PrettyPrint prettyPrint;
-    prettyPrint.print(move(ast));
+        string input;
+        cout << "Enter Expression or q to quit : ";
+        getline(cin, input);
+        if (input == "q") {running = false; break;}
+        Laxer laxer(input.c_str());
+        vector<Token> tokens = laxer.Tokenizer();
+        
+        Parser parser(tokens);
+        unique_ptr<ASTNode> ast = parser.parse();
+        
+        cout << "Parsed expresstion (AST): " << endl;
+        ast->print();
+        cout << "\n\n";
+        
+        int step = 1;
+        PrettyPrint prettyPrint;
+        prettyPrint.print(move(ast));
+    }
 
     return 0;
 }
